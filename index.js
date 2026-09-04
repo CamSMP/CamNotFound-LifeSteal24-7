@@ -1311,12 +1311,31 @@ function createBot() {
   addLog(`[Bot] Connecting to ${config.server.ip}:${config.server.port}`);
 
   try {
-    // FIX: use version:false to auto-detect server version so the bot can join any server.
-    // If the user explicitly sets a version in settings.json it is still respected.
-    const botVersion =
+    // Auto-detect server version. If the user sets a specific version in settings.json
+    // it is respected, but must be a version mineflayer supports (e.g. "1.21.1").
+    // Empty string means auto-detect (recommended).
+    const configVersion =
       config.server.version && config.server.version.trim() !== ""
-        ? config.server.version
+        ? config.server.version.trim()
         : false;
+
+    // Validate user-specified version against supported versions
+    let botVersion = false;
+    if (configVersion) {
+      const mcData = require("minecraft-data");
+      const supported = mcData.supportedVersions.pc;
+      if (!supported.includes(configVersion)) {
+        addLog(
+          `[Bot] Version "${configVersion}" is not supported by mineflayer. Supported: 1.7 - ${supported[supported.length - 1]}. Falling back to auto-detect.`,
+        );
+        botVersion = false;
+      } else {
+        botVersion = configVersion;
+      }
+    }
+
+    addLog(`[Bot] Using version: ${botVersion || "auto-detect"}`);
+
     bot = mineflayer.createBot({
       username: config["bot-account"].username,
       password: config["bot-account"].password || undefined,
