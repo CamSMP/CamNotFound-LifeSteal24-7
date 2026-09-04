@@ -178,6 +178,11 @@ app.get('/', (req, res) => {
                 <dd>${config.server.ip}</dd>
                 <p class="stat-detail">Minecraft server hostname</p>
               </div>
+              <div class="stat-card" id="schedule-card" style="display:none;">
+                <dt>Daily schedule</dt>
+                <dd id="schedule-text">—</dd>
+                <p class="stat-detail" id="schedule-detail">Active window</p>
+              </div>
             </dl>
           </section>
 
@@ -235,6 +240,24 @@ app.get('/', (req, res) => {
                 document.getElementById('coords-text').textContent = 'X ' + x + ', Y ' + y + ', Z ' + z;
               } else {
                 document.getElementById('coords-text').textContent = 'Searching…';
+              }
+
+              if (data.schedule && data.schedule.enabled) {
+                const sc = document.getElementById('schedule-card');
+                const st = document.getElementById('schedule-text');
+                const sd = document.getElementById('schedule-detail');
+                sc.style.display = '';
+                const fmtH = function(h) { var ap = h < 12 ? 'AM' : 'PM'; var d = h % 12 || 12; return d + ':00 ' + ap; };
+                st.textContent = fmtH(data.schedule.startHour) + ' - ' + fmtH(data.schedule.endHour) + ' KSA';
+                if (data.schedule.withinWindow) {
+                  var remain = Math.round(data.schedule.msUntilEnd / 1000 / 60);
+                  sd.textContent = 'Active now (' + data.schedule.ksaTime + ') - ' + remain + ' min left';
+                  sd.style.color = '#3fb950';
+                } else {
+                  var wait = Math.round(data.schedule.msUntilStart / 1000 / 60);
+                  sd.textContent = 'Paused (' + data.schedule.ksaTime + ') - resumes in ' + wait + ' min';
+                  sd.style.color = '#d29922';
+                }
               }
             } catch (e) {
               const label = document.getElementById('status-label');
@@ -471,6 +494,16 @@ app.get("/health", (req, res) => {
     lastActivity: botState.lastActivity,
     reconnectAttempts: botState.reconnectAttempts,
     memoryUsage: process.memoryUsage().heapUsed / 1024 / 1024,
+    schedule: {
+      enabled: schedule.enabled,
+      withinWindow: isWithinSchedule(),
+      paused: schedulePaused,
+      ksaTime: formatKsaTime(),
+      startHour: schedule["start-hour"],
+      endHour: schedule["end-hour"],
+      msUntilStart: schedule.enabled ? msUntilWindowStart() : null,
+      msUntilEnd: schedule.enabled ? msUntilWindowEnd() : null,
+    },
   });
 });
 
@@ -1125,6 +1158,61 @@ setInterval(
 );
 
 // ============================================================
+// SCHEDULE MANAGER - Limit bot to specific daily hours
+// Prevents Aternos bans from 24/7 activity
+// ============================================================
+const schedule = config.schedule || { enabled: false };
+let schedulePaused = false;
+
+function getKsaTime() {
+  const now = new Date();
+  const ksaMs = now.getTime() + 3 * 60 * 60 * 1000;
+  const ksaDate = new Date(ksaMs);
+  return {
+    hour: ksaDate.getUTCHours(),
+    minute: ksaDate.getUTCMinutes(),
+    second: ksaDate.getUTCSeconds(),
+  };
+}
+
+function isWithinSchedule() {
+  if (!schedule.enabled) return true;
+  const ksa = getKsaTime();
+  const currentMinutes = ksa.hour * 60 + ksa.minute;
+  const startMinutes = schedule["start-hour"] * 60;
+  const endMinutes = schedule["end-hour"] * 60;
+  return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+}
+
+function msUntilWindowStart() {
+  if (!schedule.enabled) return 0;
+  const ksa = getKsaTime();
+  const currentSeconds = ksa.hour * 3600 + ksa.minute * 60 + ksa.second;
+  const startSeconds = schedule["start-hour"] * 3600;
+  let diff = startSeconds - currentSeconds;
+  if (diff <= 0) diff += 24 * 3600;
+  return diff * 1000;
+}
+
+function msUntilWindowEnd() {
+  if (!schedule.enabled) return Infinity;
+  const ksa = getKsaTime();
+  const currentSeconds = ksa.hour * 3600 + ksa.minute * 60 + ksa.second;
+  const endSeconds = schedule["end-hour"] * 3600;
+  let diff = endSeconds - currentSeconds;
+  if (diff <= 0) diff += 24 * 3600;
+  return diff * 1000;
+}
+
+function formatKsaTime() {
+  const ksa = getKsaTime();
+  const h = ksa.hour % 12 || 12;
+  const ampm = ksa.hour < 12 ? "AM" : "PM";
+  const m = String(ksa.minute).padStart(2, "0");
+  return `${h}:${m} ${ampm} KSA`;
+}
+
+// ============================================================
 // BOT CREATION WITH RECONNECTION LOGIC
 // ============================================================
 // ============================================================
@@ -1189,6 +1277,23 @@ function createBot() {
     addLog("[Bot] Already reconnecting, skipping...");
     return;
   }
+
+  // Schedule check: don't connect outside the active window
+  if (schedule.enabled && !isWithinSchedule()) {
+    const waitMs = msUntilWindowStart();
+    const waitMin = Math.round(waitMs / 1000 / 60);
+    schedulePaused = true;
+    addLog(`[Schedule] Outside active window (now ${formatKsaTime()}). Waiting ${waitMin} min until ${schedule["start-hour"]}:00 KSA.`);
+    isReconnecting = true;
+    reconnectTimeoutId = setTimeout(() => {
+      reconnectTimeoutId = null;
+      isReconnecting = false;
+      createBot();
+    }, waitMs);
+    return;
+  }
+
+  schedulePaused = false;
 
   // Cleanup previous bot properly to avoid ghost bots
   if (bot) {
@@ -1278,6 +1383,16 @@ function createBot() {
 
       initializeModules(bot, mcData, defaultMove);
 
+      // Schedule: check every 30s if active window has ended
+      if (schedule.enabled) {
+        const endCheckId = addInterval(() => {
+          if (!isWithinSchedule() && bot && botState.connected) {
+            addLog(`[Schedule] Active window ended (${formatKsaTime()}). Disconnecting until tomorrow.`);
+            try { bot.quit("Schedule: daily time limit reached"); } catch (e) {}
+          }
+        }, 30000);
+      }
+
       // Attempt creative mode (only works if bot has OP and enabled in settings)
       setTimeout(() => {
         if (bot && botState.connected && config.server["try-creative"]) {
@@ -1351,7 +1466,7 @@ function createBot() {
         );
       }
 
-      // ALWAYS reconnect — bot must never leave the server
+      // Reconnect — respects schedule window
       scheduleReconnect();
     });
 
@@ -1378,6 +1493,20 @@ function scheduleReconnect() {
 
   isReconnecting = true;
   botState.reconnectAttempts++;
+
+  // If outside schedule window, wait for next window instead of reconnecting immediately
+  if (schedule.enabled && !isWithinSchedule()) {
+    const waitMs = msUntilWindowStart();
+    const waitMin = Math.round(waitMs / 1000 / 60);
+    schedulePaused = true;
+    addLog(`[Schedule] Outside active window. Reconnecting in ${waitMin} min (next window at ${schedule["start-hour"]}:00 KSA).`);
+    reconnectTimeoutId = setTimeout(() => {
+      reconnectTimeoutId = null;
+      isReconnecting = false;
+      createBot();
+    }, waitMs);
+    return;
+  }
 
   const delay = getReconnectDelay();
   addLog(
@@ -2074,6 +2203,11 @@ addLog(`Version: ${config.server.version}`);
 addLog(
   `Auto-Reconnect: ${config.utils["auto-reconnect"] ? "Enabled" : "Disabled"}`,
 );
+if (schedule.enabled) {
+  addLog(`Schedule: ${schedule["start-hour"]}:00 - ${schedule["end-hour"]}:00 KSA daily (current: ${formatKsaTime()})`);
+} else {
+  addLog("Schedule: Disabled (24/7 mode)");
+}
 addLog("=".repeat(50));
 
 createBot();

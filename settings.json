@@ -83,5 +83,12 @@
   },
   "chat": {
     "respond": true
+  },
+  "schedule": {
+    "enabled": true,
+    "timezone": "Asia/Riyadh",
+    "start-hour": 12,
+    "end-hour": 19,
+    "comment": "Bot active 12:00 PM - 7:00 PM KSA time daily"
   }
 }
