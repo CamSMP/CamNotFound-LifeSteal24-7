@@ -1,14 +1,14 @@
 {
   "name": "AFK Bot",
   "bot-account": {
-    "username": "CamBot",
+    "username": "624bot",
     "password": "",
     "type": "offline"
   },
   "server": {
-    "ip": "camlifesteal.minefort.com",
-    "port": 25565,
-    "version": "1.21.11",
+    "ip": "cosmicsmp911.aternos.me",
+    "port": 30615,
+    "version": "26.2",
     "try-creative": false
   },
   "position": {
@@ -20,7 +20,7 @@
   "utils": {
     "auto-auth": {
       "enabled": true,
-      "password": "chalol78"
+      "password": "afkrandomguy"
     },
     "anti-afk": {
       "enabled": true,
@@ -31,9 +31,9 @@
       "repeat": true,
       "repeat-delay": 120,
       "messages": [
-        "I'm a regular player",
-        "Subscribe to Slobos!",
-        "I like to play Minecraft!"
+        "hi yall",
+        "uh im just a random guy trying to keep the server 6/24 so uh wsp",
+        "im jst a bot i dont really do anything"
       ]
     },
     "chat-log": true,
